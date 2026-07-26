@@ -4,6 +4,8 @@ local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local Lighting = game:GetService("Lighting")
 local Workspace = game:GetService("Workspace")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local VirtualUser = game:GetService("VirtualUser")
 
 local LP = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
@@ -396,216 +398,57 @@ local function makeLabel(parent, text, order)
     return lbl
 end
 
-local function makeDropdown(parent, text, options, default, order, callback)
-    local selected = default or options[1]
-    local f = Instance.new("Frame", parent)
-    f.Size = UDim2.new(1, 0, 0, 36)
-    f.BackgroundColor3 = COLORS.card
-    f.BorderSizePixel = 0
-    f.LayoutOrder = order or 0
-    corner(f, 6)
-    stroke(f, COLORS.stroke)
-
-    local lbl = Instance.new("TextLabel", f)
-    lbl.Size = UDim2.new(0, 120, 1, 0)
-    lbl.Position = UDim2.new(0, 10, 0, 0)
-    lbl.BackgroundTransparency = 1
-    lbl.Text = text
-    lbl.TextColor3 = COLORS.text
-    lbl.Font = Enum.Font.GothamMedium
-    lbl.TextSize = 11
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-
-    local dropBtn = Instance.new("TextButton", f)
-    dropBtn.Size = UDim2.new(0, 140, 0, 24)
-    dropBtn.Position = UDim2.new(1, -152, 0.5, -12)
-    dropBtn.BackgroundColor3 = COLORS.subtle
-    dropBtn.BorderSizePixel = 0
-    dropBtn.Text = selected .. " ▾"
-    dropBtn.TextColor3 = COLORS.text
-    dropBtn.Font = Enum.Font.GothamMedium
-    dropBtn.TextSize = 10
-    corner(dropBtn, 6)
-
-    local listFrame = Instance.new("Frame", gui)
-    listFrame.Size = UDim2.new(0, 140, 0, math.min(#options * 26 + 8, 160))
-    listFrame.BackgroundColor3 = Color3.fromRGB(28, 28, 33)
-    listFrame.BorderSizePixel = 0
-    listFrame.Visible = false
-    listFrame.ZIndex = 999
-    corner(listFrame, 6)
-    stroke(listFrame, COLORS.stroke)
-
-    local listScroll = Instance.new("ScrollingFrame", listFrame)
-    listScroll.Size = UDim2.new(1, -8, 1, -8)
-    listScroll.Position = UDim2.new(0, 4, 0, 4)
-    listScroll.BackgroundTransparency = 1
-    listScroll.ScrollBarThickness = 3
-    listScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-    listScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-    listScroll.ZIndex = 999
-    Instance.new("UIListLayout", listScroll).Padding = UDim.new(0, 2)
-
-    for _, opt in ipairs(options) do
-        local item = Instance.new("TextButton", listScroll)
-        item.Size = UDim2.new(1, 0, 0, 24)
-        item.BackgroundColor3 = COLORS.card
-        item.BorderSizePixel = 0
-        item.Text = opt
-        item.TextColor3 = COLORS.text
-        item.Font = Enum.Font.Gotham
-        item.TextSize = 10
-        item.ZIndex = 999
-        corner(item, 4)
-        item.MouseButton1Click:Connect(function()
-            selected = opt
-            dropBtn.Text = opt .. " ▾"
-            listFrame.Visible = false
-            if callback then callback(opt) end
-        end)
-    end
-
-    local isOpen = false
-    dropBtn.MouseButton1Click:Connect(function()
-        isOpen = not isOpen
-        if isOpen then
-            local absPos = dropBtn.AbsolutePosition
-            listFrame.Position = UDim2.new(0, absPos.X, 0, absPos.Y + dropBtn.AbsoluteSize.Y + 4)
-            listFrame.Visible = true
-            listFrame.Parent = gui
-        else
-            listFrame.Visible = false
-        end
-    end)
-
-    UserInputService.InputBegan:Connect(function(input)
-        if isOpen and input.UserInputType == Enum.UserInputType.MouseButton1 then
-            local mouse = UserInputService:GetMouseLocation()
-            local inList = mouse.X >= listFrame.AbsolutePosition.X and mouse.X <= listFrame.AbsolutePosition.X + listFrame.AbsoluteSize.X and mouse.Y >= listFrame.AbsolutePosition.Y and mouse.Y <= listFrame.AbsolutePosition.Y + listFrame.AbsoluteSize.Y
-            local inBtn = mouse.X >= dropBtn.AbsolutePosition.X and mouse.X <= dropBtn.AbsolutePosition.X + dropBtn.AbsoluteSize.X and mouse.Y >= dropBtn.AbsolutePosition.Y and mouse.Y <= dropBtn.AbsolutePosition.Y + dropBtn.AbsoluteSize.Y
-            if not inList and not inBtn then listFrame.Visible = false; isOpen = false end
-        end
-    end)
-
-    return {get = function() return selected end}
-end
-
 -- ═══════════════════════════════════════════════════════════════
--- COMBAT ENGINE
+-- COMBAT ENGINE — VIM-based (mimics real clicks, bypasses anti-cheat)
 -- ═══════════════════════════════════════════════════════════════
-local SecureFire = nil
-pcall(function() SecureFire = filtergc("function", {Name = "SecureFire"}, true) end)
-
 local state = {}
 local connections = {}
-local cooldowns = {}
 local espObjects = {}
 local stats = {kills = 0, hits = 0, deaths = 0, weaveCount = 0}
 
 local cfg = {
     killAuraRange = 8,
-    attackDelay = 0.13,
-    weaveDelay = 0.45,
-    autoGrabCD = 18,
-    autoStompCD = 2,
+    attackDelay = 0.18,
+    weaveDelay = 0.4,
     speedMult = 3,
     hitboxSize = 10,
     espColor = COLORS.accent,
-    reachDist = 10,
+    reachDist = 20,
     floatHeight = 3,
-    targetMode = "Weakest",
-    dashDistance = 20,
+    targetMode = "Closest",
     dashCooldown = 0.5,
-    predictionTicks = 0.15,
+    antiDetectDelay = 0.05,
 }
 
 local function getChar() return LP.Character end
 local function getHRP() local c = getChar(); return c and c:FindFirstChild("HumanoidRootPart") end
 local function getHum() local c = getChar(); return c and c:FindFirstChildOfClass("Humanoid") end
-local function isAlive() local h = getHum(); return h and h.Health > 0 end
-
-local function doFire(data)
-    if SecureFire then pcall(function() SecureFire(data) end) end
-end
-
-local function getMyLimb()
-    local c = getChar()
-    if not c then return nil end
-    return c:FindFirstChild("Right Arm") or c:FindFirstChild("Right Hand") or c:FindFirstChild("Left Arm") or c:FindFirstChild("Left Hand") or c:FindFirstChild("Torso") or c:FindFirstChild("UpperTorso")
-end
 
 local function getEnemies()
     local list = {}
+    local hrp = getHRP()
+    if not hrp then return list end
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= LP and p.Character then
-            local hrp = p.Character:FindFirstChild("HumanoidRootPart")
-            local hum = p.Character:FindFirstChildOfClass("Humanoid")
-            if hrp and hum and hum.Health > 0 then
+            local tHRP = p.Character:FindFirstChild("HumanoidRootPart")
+            local tHum = p.Character:FindFirstChildOfClass("Humanoid")
+            if tHRP and tHum and tHum.Health > 0 then
                 if not p.Character:FindFirstChildOfClass("ForceField") and not p.Character:FindFirstChild("Weave") then
-                    table.insert(list, {player = p, hrp = hrp, hum = hum, char = p.Character})
+                    local dist = (hrp.Position - tHRP.Position).Magnitude
+                    if dist <= cfg.killAuraRange then
+                        table.insert(list, {player = p, hrp = tHRP, hum = tHum, char = p.Character, dist = dist})
+                    end
                 end
             end
         end
     end
+    table.sort(list, function(a, b)
+        if cfg.targetMode == "Closest" then return a.dist < b.dist
+        elseif cfg.targetMode == "Weakest" then return a.hum.Health < b.hum.Health
+        elseif cfg.targetMode == "Strongest" then return a.hum.Health > b.hum.Health
+        else return a.dist < b.dist end
+    end)
     return list
-end
-
-local function getTarget()
-    local hrp = getHRP()
-    if not hrp then return nil end
-    local enemies = getEnemies()
-    local best, bestDist = nil, cfg.killAuraRange
-
-    if cfg.targetMode == "Closest" then
-        for _, e in ipairs(enemies) do
-            local d = (hrp.Position - e.hrp.Position).Magnitude
-            if d < bestDist then bestDist = d; best = e end
-        end
-    elseif cfg.targetMode == "Weakest" then
-        local lowestHP = math.huge
-        for _, e in ipairs(enemies) do
-            local d = (hrp.Position - e.hrp.Position).Magnitude
-            if d < cfg.killAuraRange and e.hum.Health < lowestHP then
-                lowestHP = e.hum.Health
-                best = e
-                bestDist = d
-            end
-        end
-    elseif cfg.targetMode == "Strongest" then
-        local highestHP = 0
-        for _, e in ipairs(enemies) do
-            local d = (hrp.Position - e.hrp.Position).Magnitude
-            if d < cfg.killAuraRange and e.hum.Health > highestHP then
-                highestHP = e.hum.Health
-                best = e
-                bestDist = d
-            end
-        end
-    elseif cfg.targetMode == "Random" then
-        local valid = {}
-        for _, e in ipairs(enemies) do
-            if (hrp.Position - e.hrp.Position).Magnitude < cfg.killAuraRange then
-                table.insert(valid, e)
-            end
-        end
-        if #valid > 0 then best = valid[math.random(1, #valid)] end
-    end
-
-    return best
-end
-
-local function getClosestLimb(target)
-    local hrp = getHRP()
-    if not hrp or not target or not target.char then return nil end
-    local best, bestDist = nil, cfg.killAuraRange
-    for _, name in ipairs({"Head", "Torso", "UpperTorso", "LowerTorso", "Left Arm", "Right Arm", "Left Upper Arm", "Right Upper Arm", "Left Lower Arm", "Right Lower Arm", "Left Leg", "Right Leg", "Left Upper Leg", "Right Upper Leg"}) do
-        local limb = target.char:FindFirstChild(name)
-        if limb then
-            local d = (hrp.Position - limb.Position).Magnitude
-            if d < bestDist then bestDist = d; best = limb end
-        end
-    end
-    return best or target.hrp
 end
 
 local function faceTarget(target)
@@ -616,64 +459,39 @@ local function faceTarget(target)
     end
 end
 
-local function predictPosition(target, ticks)
-    local hrp = target.hrp
-    if not hrp then return hrp.Position end
-    local vel = hrp.AssemblyLinearVelocity or Vector3.new(0, 0, 0)
-    return hrp.Position + vel * ticks
+local function simulateClick()
+    pcall(function()
+        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 1)
+        task.wait(0.03)
+        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 1)
+    end)
 end
 
-local function getLineOfSight(target)
-    local hrp = getHRP()
-    if not hrp or not target or not target.hrp then return false end
-    local origin = hrp.Position + Vector3.new(0, 1, 0)
-    local direction = (target.hrp.Position - origin)
-    local ray = Workspace:Raycast(origin, direction, RaycastParams.new())
-    return ray == nil
+local function simulateKey(keycode)
+    pcall(function()
+        VirtualInputManager:SendKeyEvent(true, keycode, false, game, 1)
+        task.wait(0.03)
+        VirtualInputManager:SendKeyEvent(false, keycode, false, game, 1)
+    end)
 end
-
--- ═══════════════════════════════════════════════════════════════
--- COMBAT SYSTEMS
--- ═══════════════════════════════════════════════════════════════
 
 local function startKillAura()
     if connections.killAura then return end
     connections.killAura = task.spawn(function()
         while state.killAura do
-            if not SecureFire then
-                pcall(function() SecureFire = filtergc("function", {Name = "SecureFire"}, true) end)
+            local enemies = getEnemies()
+            if #enemies > 0 then
+                local target = enemies[1]
+                if state.faceTarget then faceTarget(target) end
+
+                simulateClick()
+                stats.hits = stats.hits + 1
+
+                local jitter = math.random(-2, 2) * 0.01
+                task.wait(cfg.attackDelay + jitter)
+            else
+                task.wait(0.1)
             end
-            local target = getTarget()
-            if target then
-                local hitLimb = getClosestLimb(target)
-                local myLimb = getMyLimb()
-                if hitLimb and myLimb then
-                    if state.faceTarget then faceTarget(target) end
-
-                    local key = tostring(target.player.UserId)
-                    if not cooldowns[key] then cooldowns[key] = {Grab = 0, Stomp = 0} end
-                    local now = tick()
-                    local atkType = "Input"
-
-                    if state.autoGrab and now - cooldowns[key].Grab >= cfg.autoGrabCD then
-                        atkType = "Grab"; cooldowns[key].Grab = now
-                    elseif state.autoStomp and now - cooldowns[key].Stomp >= cfg.autoStompCD then
-                        atkType = "Stomp"; cooldowns[key].Stomp = now
-                    end
-
-                    if atkType == "Input" then
-                        doFire({Type = "Input", Hit = hitLimb, Limb = myLimb, Humanoid = target.hum, Position = hitLimb.Position})
-                    elseif atkType == "Grab" then
-                        doFire({Type = "Grab", Hit = hitLimb, Humanoid = target.hum, Position = hitLimb.Position, Limb = myLimb})
-                    elseif atkType == "Stomp" then
-                        local stompLimb = getChar():FindFirstChild("Right Leg") or getChar():FindFirstChild("Right Foot") or myLimb
-                        doFire({Type = "Stomp", Hit = hitLimb, Humanoid = target.hum, Position = hitLimb.Position, Limb = stompLimb})
-                    end
-
-                    stats.hits = stats.hits + 1
-                end
-            end
-            task.wait(cfg.attackDelay)
         end
     end)
 end
@@ -686,9 +504,10 @@ local function startAutoWeave()
     if connections.weave then return end
     connections.weave = task.spawn(function()
         while state.autoWeave do
-            doFire({Type = "Weave"})
+            simulateKey(Enum.KeyCode.Q)
             stats.weaveCount = stats.weaveCount + 1
-            task.wait(cfg.weaveDelay)
+            local jitter = math.random(-5, 5) * 0.01
+            task.wait(cfg.weaveDelay + jitter)
         end
     end)
 end
@@ -697,13 +516,93 @@ local function stopAutoWeave()
     if connections.weave then task.cancel(connections.weave); connections.weave = nil end
 end
 
+local function startAutoBlock()
+    if connections.block then return end
+    connections.block = task.spawn(function()
+        while state.autoBlock do
+            simulateKey(Enum.KeyCode.F)
+            local jitter = math.random(-3, 3) * 0.01
+            task.wait(0.35 + jitter)
+        end
+    end)
+end
+
+local function stopAutoBlock()
+    if connections.block then task.cancel(connections.block); connections.block = nil end
+end
+
+local function startAutoStomp()
+    if connections.stomp then return end
+    connections.stomp = task.spawn(function()
+        while state.autoStomp do
+            local enemies = getEnemies()
+            for _, e in ipairs(enemies) do
+                if e.hum.Health <= 0 or e.hrp.Position.Y < getHRP().Position.Y - 2 then
+                    simulateKey(Enum.KeyCode.R)
+                    task.wait(0.3)
+                end
+            end
+            task.wait(0.2)
+        end
+    end)
+end
+
+local function stopAutoStomp()
+    if connections.stomp then task.cancel(connections.stomp); connections.stomp = nil end
+end
+
+local function startAutoSlam()
+    if connections.slam then return end
+    connections.slam = task.spawn(function()
+        while state.autoSlam do
+            simulateKey(Enum.KeyCode.T)
+            local jitter = math.random(-3, 3) * 0.01
+            task.wait(1.5 + jitter)
+        end
+    end)
+end
+
+local function stopAutoSlam()
+    if connections.slam then task.cancel(connections.slam); connections.slam = nil end
+end
+
+local function startAutoGrab()
+    if connections.grab then return end
+    connections.grab = task.spawn(function()
+        while state.autoGrab do
+            simulateKey(Enum.KeyCode.G)
+            local jitter = math.random(-5, 5) * 0.01
+            task.wait(1.0 + jitter)
+        end
+    end)
+end
+
+local function stopAutoGrab()
+    if connections.grab then task.cancel(connections.grab); connections.grab = nil end
+end
+
+local function startAutoPush()
+    if connections.push then return end
+    connections.push = task.spawn(function()
+        while state.autoPush do
+            simulateKey(Enum.KeyCode.E)
+            local jitter = math.random(-3, 3) * 0.01
+            task.wait(1.2 + jitter)
+        end
+    end)
+end
+
+local function stopAutoPush()
+    if connections.push then task.cancel(connections.push); connections.push = nil end
+end
+
 local function startAutoParry()
     if connections.parry then return end
     connections.parry = task.spawn(function()
         while state.autoParry do
-            doFire({Type = "Weave"})
+            simulateKey(Enum.KeyCode.Q)
             stats.weaveCount = stats.weaveCount + 1
-            task.wait(0.15)
+            task.wait(0.12 + math.random(-2, 2) * 0.01)
         end
     end)
 end
@@ -833,8 +732,7 @@ local function startFly()
         if not hrp then return end
         bg = Instance.new("BodyGyro", hrp)
         bg.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-        bg.P = 9000
-        bg.D = 500
+        bg.P = 9000; bg.D = 500
         bv = Instance.new("BodyVelocity", hrp)
         bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
         bv.P = 9000
@@ -852,7 +750,6 @@ local function startFly()
             bg.CFrame = camCF
             task.wait()
         end
-
         if bg then bg:Destroy() end
         if bv then bv:Destroy() end
     end)
@@ -933,6 +830,106 @@ local function stopESP()
     espObjects = {}
 end
 
+local function startAutoFollow()
+    if connections.follow then return end
+    connections.follow = task.spawn(function()
+        while state.autoFollow do
+            local hum = getHum()
+            if hum then
+                local enemies = getEnemies()
+                if #enemies > 0 then
+                    hum:MoveTo(enemies[1].hrp.Position)
+                end
+            end
+            task.wait(0.1)
+        end
+    end)
+end
+
+local function stopAutoFollow()
+    if connections.follow then task.cancel(connections.follow); connections.follow = nil end
+end
+
+local function startSprintToTarget()
+    if connections.sprint then return end
+    connections.sprint = task.spawn(function()
+        while state.sprintToTarget do
+            local hrp = getHRP()
+            local hum = getHum()
+            if hrp and hum then
+                local enemies = getEnemies()
+                if #enemies > 0 then
+                    local t = enemies[1]
+                    local predicted = t.hrp.Position + (t.hrp.AssemblyLinearVelocity or Vector3.new()) * 0.1
+                    local dir = (predicted - hrp.Position).Unit
+                    local dist = (predicted - hrp.Position).Magnitude
+                    hrp.CFrame = hrp.CFrame + dir * math.min(dist, 60) * 0.05
+                    faceTarget(t)
+                end
+            end
+            task.wait()
+        end
+    end)
+end
+
+local function stopSprintToTarget()
+    if connections.sprint then task.cancel(connections.sprint); connections.sprint = nil end
+end
+
+local function startSpin()
+    if connections.spin then return end
+    connections.spin = task.spawn(function()
+        while state.spin do
+            local hrp = getHRP()
+            if hrp then hrp.CFrame = hrp.CFrame * CFrame.Angles(0, math.rad(15), 0) end
+            task.wait()
+        end
+    end)
+end
+
+local function stopSpin()
+    if connections.spin then task.cancel(connections.spin); connections.spin = nil end
+end
+
+local function startAntiAim()
+    if connections.antiAim then return end
+    connections.antiAim = task.spawn(function()
+        while state.antiAim do
+            local hrp = getHRP()
+            if hrp then
+                local angle = tick() * 5
+                hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, angle, 0)
+            end
+            task.wait(0.05)
+        end
+    end)
+end
+
+local function stopAntiAim()
+    if connections.antiAim then task.cancel(connections.antiAim); connections.antiAim = nil end
+end
+
+local function startAntiGrab()
+    if connections.antiGrab then return end
+    connections.antiGrab = task.spawn(function()
+        while state.antiGrab do
+            local char = getChar()
+            if char then
+                for _, v in ipairs(char:GetDescendants()) do
+                    if v:IsA("BodyPosition") or v:IsA("BodyVelocity") or v:IsA("BodyAngularVelocity") or v:IsA("AlignPosition") or v:IsA("LinearVelocity") then
+                        v:Destroy()
+                    end
+                end
+            end
+            task.wait(0.05)
+        end
+    end)
+end
+
+local function stopAntiGrab()
+    if connections.antiGrab then task.cancel(connections.antiGrab); connections.antiGrab = nil end
+end
+
 local function startReachExtender()
     if connections.reach then return end
     connections.reach = RunService.Heartbeat:Connect(function()
@@ -960,210 +957,23 @@ local function stopReachExtender()
     if connections.reach then task.cancel(connections.reach); connections.reach = nil end
 end
 
-local function startAutoDash()
-    if connections.dash then return end
-    connections.dash = task.spawn(function()
-        while state.autoDash do
-            local hrp = getHRP()
-            local hum = getHum()
-            if hrp and hum and hum.MoveDirection.Magnitude > 0 then
-                hrp.CFrame = hrp.CFrame + hum.MoveDirection * cfg.dashDistance
-                task.wait(cfg.dashCooldown)
+local function startAntiKick()
+    pcall(function()
+        LP.CharacterAdded:Connect(function(char)
+            if state.antiKick then
+                task.wait(0.5)
+                local hum = char:WaitForChild("Humanoid", 5)
+                if hum then hum.Died:Connect(function() stats.deaths = stats.deaths + 1 end) end
             end
-            task.wait()
-        end
+        end)
     end)
 end
 
-local function stopAutoDash()
-    if connections.dash then task.cancel(connections.dash); connections.dash = nil end
-end
-
-local function startPrediction()
-    if connections.prediction then return end
-    connections.prediction = RunService.Heartbeat:Connect(function()
-        if not state.prediction then return end
-        local hrp = getHRP()
-        if hrp then
-            for _, p in ipairs(Players:GetPlayers()) do
-                if p ~= LP and p.Character then
-                    local tHRP = p.Character:FindFirstChild("HumanoidRootPart")
-                    if tHRP then
-                        local vel = tHRP.AssemblyLinearVelocity
-                        local predicted = tHRP.Position + vel * cfg.predictionTicks
-                        tHRP.CFrame = CFrame.new(predicted, predicted + vel.Unit)
-                    end
-                end
-            end
-        end
+local function startInfZoom()
+    pcall(function()
+        LP.CameraMaxZoomDistance = 99999
+        LP.CameraMinZoomDistance = 0.5
     end)
-end
-
-local function stopPrediction()
-    if connections.prediction then task.cancel(connections.prediction); connections.prediction = nil end
-end
-
-local function startAutoFollow()
-    if connections.follow then return end
-    connections.follow = task.spawn(function()
-        while state.autoFollow do
-            local hrp = getHRP()
-            local hum = getHum()
-            if hrp and hum then
-                local target = getTarget()
-                if target and target.hrp then
-                    local dist = (target.hrp.Position - hrp.Position).Magnitude
-                    if dist > 3 then
-                        hum:MoveTo(target.hrp.Position)
-                    end
-                end
-            end
-            task.wait(0.1)
-        end
-    end)
-end
-
-local function stopAutoFollow()
-    if connections.follow then task.cancel(connections.follow); connections.follow = nil end
-end
-
-local function startAntiAim()
-    if connections.antiAim then return end
-    connections.antiAim = task.spawn(function()
-        while state.antiAim do
-            local hrp = getHRP()
-            if hrp then
-                local angle = tick() * 5
-                hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, angle, 0)
-            end
-            task.wait(0.05)
-        end
-    end)
-end
-
-local function stopAntiAim()
-    if connections.antiAim then task.cancel(connections.antiAim); connections.antiAim = nil end
-end
-
-local function startSpin()
-    if connections.spin then return end
-    connections.spin = task.spawn(function()
-        while state.spin do
-            local hrp = getHRP()
-            if hrp then
-                hrp.CFrame = hrp.CFrame * CFrame.Angles(0, math.rad(15), 0)
-            end
-            task.wait()
-        end
-    end)
-end
-
-local function stopSpin()
-    if connections.spin then task.cancel(connections.spin); connections.spin = nil end
-end
-
-local function startSprintToTarget()
-    if connections.sprint then return end
-    connections.sprint = task.spawn(function()
-        while state.sprintToTarget do
-            local hrp = getHRP()
-            local hum = getHum()
-            if hrp and hum then
-                local enemies = getEnemies()
-                local closest, closestDist = nil, math.huge
-                for _, e in ipairs(enemies) do
-                    local d = (hrp.Position - e.hrp.Position).Magnitude
-                    if d < closestDist then closestDist = d; closest = e end
-                end
-                if closest then
-                    local targetPos = closest.hrp.Position + closest.hrp.AssemblyLinearVelocity * 0.1
-                    local dir = (targetPos - hrp.Position).Unit
-                    hrp.CFrame = hrp.CFrame + dir * math.min(closestDist, 60) * 0.05
-                    faceTarget(closest)
-                end
-            end
-            task.wait()
-        end
-    end)
-end
-
-local function stopSprintToTarget()
-    if connections.sprint then task.cancel(connections.sprint); connections.sprint = nil end
-end
-
-local function startAutoSlam()
-    if connections.slam then return end
-    connections.slam = task.spawn(function()
-        while state.autoSlam do
-            local hrp = getHRP()
-            local enemies = getEnemies()
-            for _, e in ipairs(enemies) do
-                if hrp and (hrp.Position - e.hrp.Position).Magnitude < cfg.killAuraRange then
-                    doFire({Type = "Slam", Hit = e.hrp, Humanoid = e.hum, Position = e.hrp.Position, Limb = getMyLimb()})
-                end
-            end
-            task.wait(2)
-        end
-    end)
-end
-
-local function stopAutoSlam()
-    if connections.slam then task.cancel(connections.slam); connections.slam = nil end
-end
-
-local function startAutoPush()
-    if connections.push then return end
-    connections.push = task.spawn(function()
-        while state.autoPush do
-            local hrp = getHRP()
-            local enemies = getEnemies()
-            for _, e in ipairs(enemies) do
-                if hrp and (hrp.Position - e.hrp.Position).Magnitude < cfg.killAuraRange then
-                    doFire({Type = "Push", Hit = e.hrp, Humanoid = e.hum, Position = e.hrp.Position, Limb = getMyLimb()})
-                end
-            end
-            task.wait(1.5)
-        end
-    end)
-end
-
-local function stopAutoPush()
-    if connections.push then task.cancel(connections.push); connections.push = nil end
-end
-
-local function startAntiGrab()
-    if connections.antiGrab then return end
-    connections.antiGrab = task.spawn(function()
-        while state.antiGrab do
-            local char = getChar()
-            if char then
-                for _, v in ipairs(char:GetDescendants()) do
-                    if v:IsA("BodyPosition") or v:IsA("BodyVelocity") or v:IsA("BodyAngularVelocity") or v:IsA("AlignPosition") or v:IsA("LinearVelocity") then
-                        v:Destroy()
-                    end
-                end
-            end
-            task.wait(0.05)
-        end
-    end)
-end
-
-local function stopAntiGrab()
-    if connections.antiGrab then task.cancel(connections.antiGrab); connections.antiGrab = nil end
-end
-
-local function startAutoBlock()
-    if connections.block then return end
-    connections.block = task.spawn(function()
-        while state.autoBlock do
-            doFire({Type = "Block"})
-            task.wait(0.3)
-        end
-    end)
-end
-
-local function stopAutoBlock()
-    if connections.block then task.cancel(connections.block); connections.block = nil end
 end
 
 local function startCameraShake()
@@ -1176,67 +986,14 @@ local function startCameraShake()
     end)
 end
 
-local function startInfZoom()
-    pcall(function()
-        LP.CameraMaxZoomDistance = 99999
-        LP.CameraMinZoomDistance = 0.5
-    end)
-end
-
-local function startAntiKick()
-    if connections.antiKick then return end
-    connections.antiKick = game:GetService("Players").LocalPlayer.CharacterAdded:Connect(function(char)
-        if state.antiKick then
-            task.wait(0.5)
-            local hum = char:WaitForChild("Humanoid", 5)
-            if hum then
-                hum.Died:Connect(function()
-                    stats.deaths = stats.deaths + 1
-                end)
-            end
-        end
-    end)
-end
-
-local function startSpeedHack()
-    if connections.speedHack then return end
-    connections.speedHack = RunService.Heartbeat:Connect(function(delta)
-        if not state.speedHack then return end
-        local hrp = getHRP()
-        local hum = getHum()
-        if hrp and hum and hum.MoveDirection.Magnitude > 0 then
-            hrp.AssemblyLinearVelocity = hum.MoveDirection * cfg.speedMult * 30
-        end
-    end)
-end
-
-local function stopSpeedHack()
-    if connections.speedHack then connections.speedHack:Disconnect(); connections.speedHack = nil end
-end
-
-local function startAutoRespawn()
-    if connections.respawn then return end
-    connections.respawn = LP.CharacterAdded:Connect(function(char)
-        if state.autoRespawn then
-            task.wait(1)
-            local hrp = char:WaitForChild("HumanoidRootPart", 5)
-            if hrp then
-                hrp.CFrame = CFrame.new(0, 50, 0)
-            end
-        end
-    end)
-end
-
 -- ═══════════════════════════════════════════════════════════════
 -- BUILD TABS
 -- ═══════════════════════════════════════════════════════════════
 
--- COMBAT TAB
 local combatTab = createTab("Combat", "⚔", 1)
-makeSection(combatTab, "Kill Aura", 1)
+makeSection(combatTab, "Kill Aura (Clicks)", 1)
 makeSlider(combatTab, "Range", 3, 25, 8, 2, function(v) cfg.killAuraRange = v end)
-makeSlider(combatTab, "Attack Delay (ms)", 5, 50, 13, 3, function(v) cfg.attackDelay = v / 100 end)
-makeDropdown(combatTab, "Target Mode", {"Weakest", "Closest", "Strongest", "Random"}, "Weakest", 4, function(v) cfg.targetMode = v end)
+makeSlider(combatTab, "Attack Delay (ms)", 10, 50, 18, 3, function(v) cfg.attackDelay = v / 100 end)
 makeToggle(combatTab, "Kill Aura", false, 5, function(v)
     state.killAura = v
     if v then startKillAura() else stopKillAura() end
@@ -1244,68 +1001,68 @@ makeToggle(combatTab, "Kill Aura", false, 5, function(v)
     statusLabel.TextColor3 = v and COLORS.green or COLORS.muted
 end)
 makeToggle(combatTab, "Face Target", false, 6, function(v) state.faceTarget = v end)
-makeToggle(combatTab, "Auto Grab (18s CD)", false, 7, function(v) state.autoGrab = v end)
-makeToggle(combatTab, "Auto Stomp (2s CD)", false, 8, function(v) state.autoStomp = v end)
-makeToggle(combatTab, "Auto Slam", false, 9, function(v)
-    state.autoSlam = v
-    if v then startAutoSlam() else stopAutoSlam() end
-end)
-makeToggle(combatTab, "Auto Push", false, 10, function(v)
-    state.autoPush = v
-    if v then startAutoPush() else stopAutoPush() end
-end)
-makeToggle(combatTab, "Auto Block", false, 11, function(v)
-    state.autoBlock = v
-    if v then startAutoBlock() else stopAutoBlock() end
-end)
 
-makeSection(combatTab, "Defense", 20)
-makeToggle(combatTab, "Auto Weave", false, 21, function(v)
+makeSection(combatTab, "Auto Actions (Keys)", 10)
+makeToggle(combatTab, "Auto Weave (Q)", false, 11, function(v)
     state.autoWeave = v
     if v then startAutoWeave() else stopAutoWeave() end
 end)
-makeSlider(combatTab, "Weave Delay (ms)", 20, 100, 45, 22, function(v) cfg.weaveDelay = v / 100 end)
-makeToggle(combatTab, "Auto Parry (Fast)", false, 23, function(v)
+makeSlider(combatTab, "Weave Delay (ms)", 20, 100, 40, 12, function(v) cfg.weaveDelay = v / 100 end)
+makeToggle(combatTab, "Auto Parry (Fast Q)", false, 13, function(v)
     state.autoParry = v
     if v then startAutoParry() else stopAutoParry() end
 end)
-makeToggle(combatTab, "Anti-Grab", false, 24, function(v)
-    state.antiGrab = v
-    if v then startAntiGrab() else stopAntiGrab() end
+makeToggle(combatTab, "Auto Block (F)", false, 14, function(v)
+    state.autoBlock = v
+    if v then startAutoBlock() else stopAutoBlock() end
 end)
-makeToggle(combatTab, "Anti-Aim", false, 25, function(v)
-    state.antiAim = v
-    if v then startAntiAim() else stopAntiAim() end
+makeToggle(combatTab, "Auto Stomp (R)", false, 15, function(v)
+    state.autoStomp = v
+    if v then startAutoStomp() else stopAutoStomp() end
 end)
-makeToggle(combatTab, "No-Collide Defense", false, 26, function(v)
+makeToggle(combatTab, "Auto Slam (T)", false, 16, function(v)
+    state.autoSlam = v
+    if v then startAutoSlam() else stopAutoSlam() end
+end)
+makeToggle(combatTab, "Auto Grab (G)", false, 17, function(v)
+    state.autoGrab = v
+    if v then startAutoGrab() else stopAutoGrab() end
+end)
+makeToggle(combatTab, "Auto Push (E)", false, 18, function(v)
+    state.autoPush = v
+    if v then startAutoPush() else stopAutoPush() end
+end)
+
+makeSection(combatTab, "Defense", 20)
+makeToggle(combatTab, "No-Collide Defense", false, 21, function(v)
     state.noCollide = v
     if v then startNoCollide() else stopNoCollide() end
 end)
-makeToggle(combatTab, "Remove Camera Shake", false, 27, function(v)
-    if v then startCameraShake() end
+makeToggle(combatTab, "Anti-Grab", false, 22, function(v)
+    state.antiGrab = v
+    if v then startAntiGrab() else stopAntiGrab() end
 end)
+makeToggle(combatTab, "Anti-Aim", false, 23, function(v)
+    state.antiAim = v
+    if v then startAntiAim() else stopAntiAim() end
+end)
+makeToggle(combatTab, "Remove Camera Shake", false, 24, function(v) if v then startCameraShake() end end)
 
-makeSection(combatTab, "Reach & Target", 40)
-makeToggle(combatTab, "Reach Extender", false, 41, function(v)
+makeSection(combatTab, "Targeting", 30)
+makeToggle(combatTab, "Reach Extender", false, 31, function(v)
     state.reachExtender = v
     if v then startReachExtender() else stopReachExtender() end
 end)
-makeSlider(combatTab, "Reach Distance", 10, 60, 20, 42, function(v) cfg.reachDist = v end)
-makeToggle(combatTab, "Sprint To Target", false, 43, function(v)
+makeSlider(combatTab, "Reach Distance", 10, 60, 20, 32, function(v) cfg.reachDist = v end)
+makeToggle(combatTab, "Sprint To Target", false, 33, function(v)
     state.sprintToTarget = v
     if v then startSprintToTarget() else stopSprintToTarget() end
 end)
-makeToggle(combatTab, "Auto Follow", false, 44, function(v)
+makeToggle(combatTab, "Auto Follow", false, 34, function(v)
     state.autoFollow = v
     if v then startAutoFollow() else stopAutoFollow() end
 end)
-makeToggle(combatTab, "Auto Dash", false, 45, function(v)
-    state.autoDash = v
-    if v then startAutoDash() else stopAutoDash() end
-end)
-makeSlider(combatTab, "Dash Distance", 5, 50, 20, 46, function(v) cfg.dashDistance = v end)
 
--- HITBOX TAB
 local hitboxTab = createTab("Hitbox", "🎯", 2)
 makeSection(hitboxTab, "Hitbox Expander", 1)
 makeToggle(hitboxTab, "Enable Hitbox Expander", false, 2, function(v)
@@ -1313,27 +1070,14 @@ makeToggle(hitboxTab, "Enable Hitbox Expander", false, 2, function(v)
     if v then startHitboxExpander() else stopHitboxExpander() end
 end)
 makeSlider(hitboxTab, "Hitbox Size", 5, 60, 10, 3, function(v) cfg.hitboxSize = v end)
-makeLabel(hitboxTab, "Expands enemy hitboxes + highlights red", 4)
 
-makeSection(hitboxTab, "Target Prediction", 10)
-makeToggle(hitboxTab, "Enable Prediction", false, 11, function(v)
-    state.prediction = v
-    if v then startPrediction() else stopPrediction() end
-end)
-makeSlider(hitboxTab, "Prediction Ticks", 1, 10, 2, 12, function(v) cfg.predictionTicks = v / 10 end)
-
--- MOVEMENT TAB
 local moveTab = createTab("Move", "🏃", 3)
 makeSection(moveTab, "Speed", 1)
-makeToggle(moveTab, "Speed Boost (TranslateBy)", false, 2, function(v)
+makeToggle(moveTab, "Speed Boost", false, 2, function(v)
     state.speed = v
     if v then startSpeed() else stopSpeed() end
 end)
-makeToggle(moveTab, "Speed Hack (Velocity)", false, 3, function(v)
-    state.speedHack = v
-    if v then startSpeedHack() else stopSpeedHack() end
-end)
-makeSlider(moveTab, "Speed Multiplier", 1, 15, 3, 4, function(v) cfg.speedMult = v end)
+makeSlider(moveTab, "Speed Multiplier", 1, 15, 3, 3, function(v) cfg.speedMult = v end)
 
 makeSection(moveTab, "Jump & Fly", 10)
 makeToggle(moveTab, "Bunny Hop", false, 11, function(v)
@@ -1368,7 +1112,6 @@ makeToggle(moveTab, "Spin", false, 24, function(v)
     if v then startSpin() else stopSpin() end
 end)
 
--- VISUAL TAB
 local visualTab = createTab("Visual", "👁", 4)
 makeSection(visualTab, "ESP", 1)
 makeToggle(visualTab, "Player ESP", false, 2, function(v)
@@ -1389,36 +1132,17 @@ makeButton(visualTab, "FPS Boost", 13, function()
     end
 end)
 
--- PLAYER TAB
 local playerTab = createTab("Player", "👤", 5)
 makeSection(playerTab, "Character", 1)
 makeButton(playerTab, "Reset Character", 2, function()
     local c = getChar()
     if c then c:BreakJoints() end
 end)
-makeButton(playerTab, "Respawn", 3, function()
-    local c = getChar()
-    if c then c:BreakJoints() end
-end)
-makeToggle(playerTab, "Auto Respawn", false, 4, function(v)
-    state.autoRespawn = v
-    if v then startAutoRespawn() end
-end)
-
-makeSection(playerTab, "Teleport", 10)
-makeButton(playerTab, "Teleport to Cursor", 11, function()
+makeButton(playerTab, "Teleport to Cursor", 3, function()
     local hrp = getHRP()
     if hrp then hrp.CFrame = LP:GetMouse().CFrame + Vector3.new(0, 3, 0) end
 end)
-makeButton(playerTab, "Sprint to Cursor", 12, function()
-    local hrp = getHRP()
-    if hrp then
-        local mouse = LP:GetMouse()
-        local pos = Vector3.new(mouse.Hit.Position.X, hrp.Position.Y, mouse.Hit.Position.Z)
-        hrp.CFrame = CFrame.new(hrp.Position, pos)
-    end
-end)
-makeButton(playerTab, "Teleport to Nearest", 13, function()
+makeButton(playerTab, "Teleport to Nearest", 4, function()
     local hrp = getHRP()
     if hrp then
         local closest, closestDist = nil, math.huge
@@ -1435,18 +1159,15 @@ makeButton(playerTab, "Teleport to Nearest", 13, function()
     end
 end)
 
--- SERVER TAB
 local serverTab = createTab("Server", "🌐", 6)
 makeSection(serverTab, "Info", 1)
 makeLabel(serverTab, "Players: " .. #Players:GetPlayers() .. " / " .. Players.MaxPlayers, 2)
-
-makeSection(serverTab, "Server", 10)
-makeButton(serverTab, "Rejoin Server", 11, function()
+makeButton(serverTab, "Rejoin Server", 3, function()
     LP:Kick("Rejoining...")
     task.wait(0.5)
     game:GetService("TeleportService"):Teleport(game.PlaceId, LP)
 end)
-makeButton(serverTab, "Server Hop", 12, function()
+makeButton(serverTab, "Server Hop", 4, function()
     pcall(function()
         local servers = game:GetService("HttpService"):JSONDecode(game:HttpGet("https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"))
         for _, s in ipairs(servers.data or {}) do
@@ -1457,41 +1178,12 @@ makeButton(serverTab, "Server Hop", 12, function()
         end
     end)
 end)
-makeButton(serverTab, "Copy JobId", 13, function()
-    pcall(function() setclipboard(game.JobId) end)
-end)
 
-makeSection(serverTab, "Destruction", 20)
-makeButton(serverTab, "Lag Server (50 Parts)", 21, function()
-    for i = 1, 50 do
-        pcall(function()
-            local p = Instance.new("Part", Workspace)
-            p.Size = Vector3.new(50, 50, 50)
-            p.Position = getHRP().Position + Vector3.new(math.random(-20, 20), 0, math.random(-20, 20))
-            p.Anchored = false
-        end)
-    end
-end)
-makeButton(serverTab, "Clear All Parts", 22, function()
-    for _, v in ipairs(Workspace:GetChildren()) do
-        if v:IsA("Part") and v.Size.X > 10 then v:Destroy() end
-    end
-end)
-makeButton(serverTab, "Remove All Lights", 23, function()
-    Lighting.Brightness = 2
-    Lighting.ClockTime = 14
-    Lighting.FogEnd = 100000
-    Lighting.GlobalShadows = false
-    Lighting.Ambient = Color3.fromRGB(178, 178, 178)
-end)
-
--- STATS TAB
 local statsTab = createTab("Stats", "📊", 7)
 makeSection(statsTab, "Combat Stats", 1)
 local hitsLabel = makeLabel(statsTab, "Hits: 0", 2)
 local weaveLabel = makeLabel(statsTab, "Weaves: 0", 3)
 local deathLabel = makeLabel(statsTab, "Deaths: 0", 4)
-
 task.spawn(function()
     while gui.Parent do
         hitsLabel.Text = "Hits: " .. stats.hits
@@ -1501,7 +1193,6 @@ task.spawn(function()
     end
 end)
 
--- SETTINGS TAB
 local settingsTab = createTab("Settings", "⚙", 8)
 makeSection(settingsTab, "Panic", 1)
 makeButton(settingsTab, "STOP EVERYTHING", 2, function()
@@ -1509,23 +1200,20 @@ makeButton(settingsTab, "STOP EVERYTHING", 2, function()
     stopKillAura(); stopAutoWeave(); stopAutoParry(); stopNoCollide()
     stopSpeed(); stopBunnyHop(); stopInfJump(); stopAntiVoid()
     stopFloat(); stopNoclip(); stopFly(); stopHitboxExpander()
-    stopESP(); stopReachExtender(); stopAutoDash(); stopPrediction()
-    stopAutoFollow(); stopAntiAim(); stopSpin(); stopSprintToTarget()
-    stopAutoSlam(); stopAutoPush(); stopAntiGrab(); stopAutoBlock()
-    stopSpeedHack()
+    stopESP(); stopAutoFollow(); stopSprintToTarget(); stopSpin()
+    stopAntiAim(); stopAntiGrab(); stopAutoBlock(); stopAutoStomp()
+    stopAutoSlam(); stopAutoGrab(); stopAutoPush(); stopReachExtender()
     statusLabel.Text = "STATUS: STOPPED"
     statusLabel.TextColor3 = COLORS.yellow
 end)
-
 makeButton(settingsTab, "Unload Script", 3, function()
     for k, _ in pairs(state) do state[k] = false end
     stopKillAura(); stopAutoWeave(); stopAutoParry(); stopNoCollide()
     stopSpeed(); stopBunnyHop(); stopInfJump(); stopAntiVoid()
     stopFloat(); stopNoclip(); stopFly(); stopHitboxExpander()
-    stopESP(); stopReachExtender(); stopAutoDash(); stopPrediction()
-    stopAutoFollow(); stopAntiAim(); stopSpin(); stopSprintToTarget()
-    stopAutoSlam(); stopAutoPush(); stopAntiGrab(); stopAutoBlock()
-    stopSpeedHack()
+    stopESP(); stopAutoFollow(); stopSprintToTarget(); stopSpin()
+    stopAntiAim(); stopAntiGrab(); stopAutoBlock(); stopAutoStomp()
+    stopAutoSlam(); stopAutoGrab(); stopAutoPush(); stopReachExtender()
     gui:Destroy()
 end)
 
@@ -1540,7 +1228,6 @@ UserInputService.InputBegan:Connect(function(input, processed)
     end
 end)
 
--- Show first tab
 local firstTab = tabFrames["Combat"]
 if firstTab then
     firstTab.frame.Visible = true
@@ -1552,3 +1239,4 @@ end
 
 statusLabel.Text = "STATUS: LOADED"
 statusLabel.TextColor3 = COLORS.green
+startAntiKick()
