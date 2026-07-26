@@ -1,6 +1,6 @@
 # VOIDZ BASEPLATE — Fight on a Baseplate Combat Hub
 
-Build: `2026-07-26` · Author: Grey
+Build: `2026-07-26` · Author: VOIDZ
 
 Combat hub for Fight on a Baseplate with 30+ features across 8 tabs. VIM-based input engine for anti-cheat bypass.
 
@@ -48,4 +48,4 @@ Research from l10scripts, Shrak, claudeWaffen, Swat07, Vongola, and Waffen input
 
 ## Credits
 
-Part of the VOIDZ script collection. Built by **Grey**.
+Part of the VOIDZ script collection. Built by **VOIDZ**.
